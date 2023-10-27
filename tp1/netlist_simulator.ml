@@ -8,7 +8,7 @@ Simulates the execution of the given program.
 The program is assumed to be scheduled.
 *)
 let simulator program number_steps = 
-  if number_steps <= 0 then failwith "Warning: the number of steps is null" ;
+  let number_steps = if number_steps >= 1 then number_steps else 1 in
   (*let rom = Array.make 10_000 false in*)
 
   (* we will store the current values of the variables in a hash table *)
@@ -18,7 +18,20 @@ let simulator program number_steps =
   List.iter (fun ident ->
     Printf.printf "%s ? " ident ;
     let i = read_int () in
-    Hashtbl.add environment ident (if i = 0 then VBit(false) else VBit(true)) (* TODO: VBitArray *)
+    Hashtbl.add environment ident (
+      if i = 0 then VBit(false) 
+      else if i = 1 then VBit(true) 
+      else 
+        let i = ref i in
+        let l = ref [] in 
+        while !i > 0 do 
+          let byte = !i mod 10 in
+          if (byte != 0 && byte != 1) then failwith "inputs must be given in binary";
+          l := (if byte = 0 then false else true) :: !l ;
+          i := !i / 10
+        done ;
+        VBitArray(Array.of_list !l)
+    )
   ) program.p_inputs ;
 
   (* TODO: add default values to environment for REG *)
@@ -73,11 +86,15 @@ let simulator program number_steps =
   (* display the value of each variable *)
   List.iter (
     fun ident -> 
-      Format.printf "=> %s = %d\n" ident (
       let v = find_environment_var ident in 
       match v with
-        | VBit(b) -> if b then 1 else 0
-        | _ -> failwith "VBitArrays are not implemented yet")
+        | VBit(b) -> Format.printf "=> %s = %d\n" ident (if b then 1 else 0)
+        | VBitArray(a) -> 
+          Format.printf "=> %s = " ident ;
+          Array.iter (
+            fun b -> Format.printf "%d" (if b then 1 else 0)
+          ) a ;
+          Format.printf "\n"
     ) program.p_outputs
 
 
