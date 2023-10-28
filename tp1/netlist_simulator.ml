@@ -3,6 +3,7 @@ open Netlist_ast
 let print_only = ref false
 let number_steps = ref (-1)
 let rom_addr_size = 8
+let ram_addr_size = 8
 
 (* Fast exponentiation *)
 let rec pow a = function
@@ -16,6 +17,10 @@ let rec pow a = function
 let bool_array_to_int array =
   Array.fold_right (fun b i -> (2 * i) + if b then 1 else 0) array 0
 
+let value_to_int = function
+| VBit b -> if b then 1 else 0
+| VBitArray array -> bool_array_to_int array
+
 (** 
 Simulates the execution of the given program.
 The program is assumed to be scheduled.
@@ -23,7 +28,8 @@ The program is assumed to be scheduled.
 let simulator program number_steps =
   let number_steps = ref number_steps in
   (* initialises the ROM with zeros as arbitrary values *)
-  let rom = Array.make (pow 2 rom_addr_size) false in
+  let rom = Array.make (pow 2 rom_addr_size) false
+  and ram = Array.make (pow 2 ram_addr_size) false in
 
   (* we will store the current values of the variables in a hash table *)
   let environment = Hashtbl.create (List.length program.p_outputs) in
@@ -37,13 +43,13 @@ let simulator program number_steps =
     | Some v -> v
   in
 
-  (* utility function to return the value of an argument *)
+  (* utility function to evaluate an argument *)
   let simulate_arg = function
     | Aconst c -> c
     | Avar ident -> find_environment_var ident
   in
 
-  (* return the value of the given expression *)
+  (* evaluate the given expression *)
   let rec simulate_expr = function
     | Earg arg -> simulate_arg arg
     | Ereg ident -> (
@@ -67,7 +73,8 @@ let simulator program number_steps =
               | And -> b1 && b2
               | Nand -> not (b1 && b2))
         | VBitArray(a1), VBitArray(a2) -> 
-          if Array.length a1 <> Array.length a2 then failwith "Syntax error: a binary operator can only be applied between two buses of same size" ;
+          if Array.length a1 <> Array.length a2 
+            then failwith "Syntax error: a binary operator can only be applied between two buses of same size" ;
           VBitArray(
             Array.init (Array.length a1) (
               fun i -> let b1 = a1.(i) and b2 = a2.(i) in
@@ -84,47 +91,70 @@ let simulator program number_steps =
         | VBit b -> if b then simulate_arg a2 else simulate_arg a1
         | VBitArray _ ->
             failwith
-              "Syntax error: the first argument of MUX must be a byte, not a \
-               bus")
-    | Erom (addr_size, word_size, read_addr_arg) ->
-        let read_addr =
-          match simulate_arg read_addr_arg with
-          | VBit b -> if b then 1 else 0
-          | VBitArray array -> bool_array_to_int array
-        in
+              "MUX: the first argument must be a byte, not a bus")
+    | Erom (addr_size, word_size, read_addr) ->
+        let read_addr = value_to_int (simulate_arg read_addr) in
         if word_size = 1 then VBit rom.(word_size * read_addr)
         else VBitArray (Array.sub rom read_addr word_size)
     | Eram (addr_size, word_size, read_addr, write_enable, write_addr, data) ->
-        failwith "RAM not implemented yet"
+        (* we choose to start by reading and then writing *)
+        (* reading *)
+        let read_addr = value_to_int (simulate_arg read_addr) in
+        let output_value = if word_size = 1 then VBit ram.(word_size * read_addr)
+        else VBitArray (Array.sub ram read_addr word_size) in
+
+        (* writing *)
+        let write_addr = value_to_int (simulate_arg write_addr)
+        and write_enable = (match simulate_arg write_enable with
+        | VBit b -> b
+        | VBitArray _ -> failwith "RAM: write_enable must be a bit, not a bus")
+        in
+        
+        let data = (match simulate_arg data with 
+        | VBit b -> [|b|]
+        | VBitArray a -> a
+        ) in
+        if Array.length data <> word_size then failwith "RAM: data must be of size word_size" ;
+        if write_enable then begin 
+          for i = 0 to word_size - 1 do 
+            ram.(write_addr + i) <- data.(i)
+          done
+        end ;
+
+        output_value
+        
     | Eslice (i1, i2, arg) -> (
         match simulate_arg arg with
         | VBit _ ->
-            failwith "Syntax error: SLICE must be called on a bus, not a byte"
+            failwith "SLICE: third argument must be a bus, not a bt"
         | VBitArray array -> VBitArray (Array.sub array i1 (i2 - i1 + 1)))
     | Econcat (arg1, arg2) ->
         let array1 =
-          match simulate_arg arg1 with VBit b -> [| b |] | VBitArray a -> a
+          match simulate_arg arg1 with 
+          | VBit b -> [| b |] 
+          | VBitArray a -> a
         and array2 =
-          match simulate_arg arg2 with VBit b -> [| b |] | VBitArray a -> a
+          match simulate_arg arg2 with 
+          | VBit b -> [| b |] 
+          | VBitArray a -> a
         in
         VBitArray (Array.concat [ array1; array2 ])
     | Eselect (i, a) -> (
         match simulate_arg a with
         | VBit v ->
             if i = 0 then VBit v
-            else failwith "SELECT applied on a byte with non-null index"
+            else failwith "SELECT: applied on a byte with non-null index"
         | VBitArray array -> 
           try VBit array.(i) with 
           | Invalid_argument s -> failwith ("SELECT: " ^ s))
   in
 
-  let i = ref 0 in
+  let step = ref 0 in
   while !number_steps <> 0 do
     number_steps := !number_steps - 1;
-    incr i;
+    incr step;
 
-
-    Format.printf "Step %d:@." !i ;
+    Format.printf "Step %d:@." !step ;
 
     (* asks the user to enter the inputs of the program *)
     List.iter
