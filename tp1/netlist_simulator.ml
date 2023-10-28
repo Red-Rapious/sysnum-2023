@@ -2,6 +2,18 @@ open Netlist_ast
 
 let print_only = ref false
 let number_steps = ref (-1)
+let rom_addr_size = 8
+
+(* fast exponentiation used to compute 2^rom_addr_size *)
+let rec pow a = function
+  | 0 -> 1
+  | 1 -> a
+  | n -> 
+    let b = pow a (n / 2) in
+    b * b * (if n mod 2 = 0 then 1 else a)
+
+(** Given an array of booleans representing bytes of an integer in base 2, returns the corresponding integer. *)
+let bool_array_to_int array = Array.fold_right (fun b i -> 2 * i + (if b then 1 else 0)) array 0
 
 (** 
 Simulates the execution of the given program.
@@ -9,7 +21,8 @@ The program is assumed to be scheduled.
 *)
 let simulator program number_steps = 
   let number_steps = if number_steps >= 1 then number_steps else 1 in
-  (*let rom = Array.make 10_000 false in*)
+  (* initialises the ROM with zeros as arbitrary values *)
+  let rom = Array.make (pow 2 rom_addr_size) false in
 
   (* we will store the current values of the variables in a hash table *)
   let environment = Hashtbl.create (List.length program.p_outputs) in
@@ -21,16 +34,7 @@ let simulator program number_steps =
     Hashtbl.add environment ident (
       if input = "0" then VBit(false) 
       else if input = "1" then VBit(true) 
-      else 
-        (*let i = ref i in
-        let l = ref [] in 
-        while !i > 0 do 
-          let byte = !i mod 10 in
-          if (byte != 0 && byte != 1) then failwith "inputs must be given in binary";
-          l := (if byte = 0 then false else true) :: !l ;
-          i := !i / 10
-        done ;
-        VBitArray(Array.of_list !l)*)
+      else
         let l = ref [] in
         for i = 0 to (String.length input) - 1 do
           l := (
@@ -44,8 +48,6 @@ let simulator program number_steps =
         VBitArray(Array.of_list !l)
     )
   ) program.p_inputs ;
-
-  (* TODO: add default values to environment for REG *)
 
   (* look up a variable in the environment and return its value *)
   let find_environment_var ident = 
@@ -63,7 +65,16 @@ let simulator program number_steps =
   (* return the value of the given expression *)
   let simulate_expr = function
   | Earg(arg) -> simulate_arg arg
-  | Ereg(ident) -> find_environment_var ident
+  | Ereg(ident) -> 
+    (try find_environment_var ident
+    (* if the value is not in the environment, then this is the first cycle.
+      an arbitrary default value is then returned *)
+    with | Not_found -> 
+      match Env.find ident program.p_vars with
+      (* arbitrary default values: zeros everywhere *)
+      | TBit -> VBit(false)
+      | TBitArray(l) -> VBitArray(Array.make l false)
+    )
   | Enot(arg) -> simulate_arg arg
   | Ebinop(binop, a1, a2) -> 
       (match (simulate_arg a1, simulate_arg a2) with
@@ -80,8 +91,13 @@ let simulator program number_steps =
     | VBit(b) -> if b then simulate_arg a2 else simulate_arg a1
     | VBitArray(_) -> failwith "Syntax error: the first argument of MUX must be a byte, not a bus"
     end
-  | Erom(addr_size, word_size, read_addr) -> failwith "VBitArrays are not implemented yet"
-    (*if word_size = 1 then rom.(word_size * (simulate_arg read_addr)) else failwith "ROM only available for VBit"*)
+  | Erom(addr_size, word_size, read_addr_arg) -> 
+    let read_addr = match simulate_arg read_addr_arg with
+    | VBit(b) -> if b then 1 else 0
+    | VBitArray(array) -> bool_array_to_int array
+    in
+    if word_size = 1 then VBit(rom.(word_size * read_addr))
+    else VBitArray(Array.sub rom read_addr word_size)
   | Eram(addr_size, word_size, read_addr, write_enable, write_addr, data) -> failwith "VBitArrays are not implemented yet"
   | Eslice(i1, i2, arg) -> 
     (
@@ -102,7 +118,7 @@ let simulator program number_steps =
     VBitArray(Array.concat [array1; array2])
   | Eselect(i, a) -> 
     match simulate_arg a with
-    | VBit(v) -> if i = 0 then VBit(v) else failwith "SELECT applied with non-null index on a byte"
+    | VBit(v) -> if i = 0 then VBit(v) else failwith "SELECT applied on a byte with non-null index"
     | VBitArray(array) -> VBit(array.(i)) (* TODO: catch array out of range *)
   in
   
@@ -110,9 +126,6 @@ let simulator program number_steps =
   for i = 0 to number_steps - 1 do
     List.iter (fun (ident, expr) -> Hashtbl.add environment ident (simulate_expr expr)) program.p_eqs
   done ;
-
-  (*Printf.printf "keys: " ;
-  Seq.iter (fun ident -> Printf.printf "%s, " ident) (Hashtbl.to_seq_keys environment); *)
 
   (* display the value of each variable *)
   List.iter (
