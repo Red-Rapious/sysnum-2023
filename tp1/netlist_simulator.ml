@@ -4,7 +4,7 @@ let print_only = ref false
 let number_steps = ref (-1)
 let rom_addr_size = 8
 
-(* fast exponentiation used to compute 2^rom_addr_size *)
+(* Fast exponentiation *)
 let rec pow a = function
   | 0 -> 1
   | 1 -> a
@@ -43,7 +43,7 @@ let simulator program number_steps =
                (match input.[i] with
                | '0' -> false
                | '1' -> true
-               | _ -> failwith "inputs must be given in binary")
+               | _ -> failwith "Inputs must be given in binary")
                :: !l
            done;
            VBitArray (Array.of_list !l)))
@@ -65,7 +65,7 @@ let simulator program number_steps =
   in
 
   (* return the value of the given expression *)
-  let simulate_expr = function
+  let rec simulate_expr = function
     | Earg arg -> simulate_arg arg
     | Ereg ident -> (
         try
@@ -87,7 +87,19 @@ let simulator program number_steps =
               | Xor -> (b1 || b1) && not (b1 && b2)
               | And -> b1 && b2
               | Nand -> not (b1 && b2))
-        | _, _ -> failwith "VBitArrays are not implemented yet")
+        | VBitArray(a1), VBitArray(a2) -> 
+          if Array.length a1 <> Array.length a2 then failwith "Syntax error: a binary operator can only be applied between two buses of same size" ;
+          VBitArray(
+            Array.init (Array.length a1) (
+              fun i -> let b1 = a1.(i) and b2 = a2.(i) in
+              (match binop with
+              | Or -> b1 || b2
+              | Xor -> (b1 || b1) && not (b1 && b2)
+              | And -> b1 && b2
+              | Nand -> not (b1 && b2))
+            )
+          )
+        | _, _ -> failwith "Syntax error: a binary operator can only be applied between two bits or two buses")
     | Emux (choice, a1, a2) -> (
         match simulate_arg choice with
         | VBit b -> if b then simulate_arg a2 else simulate_arg a1
@@ -104,7 +116,7 @@ let simulator program number_steps =
         if word_size = 1 then VBit rom.(word_size * read_addr)
         else VBitArray (Array.sub rom read_addr word_size)
     | Eram (addr_size, word_size, read_addr, write_enable, write_addr, data) ->
-        failwith "VBitArrays are not implemented yet"
+        failwith "RAM not implemented yet"
     | Eslice (i1, i2, arg) -> (
         match simulate_arg arg with
         | VBit _ ->
@@ -122,28 +134,31 @@ let simulator program number_steps =
         | VBit v ->
             if i = 0 then VBit v
             else failwith "SELECT applied on a byte with non-null index"
-        | VBitArray array -> VBit array.(i))
-    (* TODO: catch array out of range *)
+        | VBitArray array -> 
+          try VBit array.(i) with 
+          | Invalid_argument s -> failwith ("SELECT: " ^ s))
   in
 
-  (* for each equation, compute the value and add it to the environment *)
   for i = 0 to number_steps - 1 do
+    (* for each equation, computes the value, and adds it to the environment *)
     List.iter
       (fun (ident, expr) -> Hashtbl.add environment ident (simulate_expr expr))
-      program.p_eqs
-  done;
+      program.p_eqs ;
 
-  (* display the value of each variable *)
-  List.iter
-    (fun ident ->
-      let v = find_environment_var ident in
-      match v with
-      | VBit b -> Format.printf "=> %s = %d\n" ident (if b then 1 else 0)
-      | VBitArray a ->
-          Format.printf "=> %s = " ident;
-          Array.iter (fun b -> Format.printf "%d" (if b then 1 else 0)) a;
-          Format.printf "\n")
-    program.p_outputs
+    (* display the value of each variable *)
+    Format.printf "\n== Step %d ==\n" i ;
+    List.iter
+      (fun ident ->
+        let v = find_environment_var ident in
+        match v with
+        | VBit b -> Format.printf "=> %s = %d\n" ident (if b then 1 else 0)
+        | VBitArray a ->
+            Format.printf "=> %s = " ident;
+            Array.iter (fun b -> Format.printf "%d" (if b then 1 else 0)) a;
+            Format.printf "\n")
+      program.p_outputs
+  done
+
 
 let compile filename =
   try
