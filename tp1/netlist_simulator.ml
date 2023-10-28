@@ -17,18 +17,29 @@ let simulator program number_steps =
   (* asks the user to enter the inputs of the program *)
   List.iter (fun ident ->
     Printf.printf "%s ? " ident ;
-    let i = read_int () in
+    let input = read_line () in
     Hashtbl.add environment ident (
-      if i = 0 then VBit(false) 
-      else if i = 1 then VBit(true) 
+      if input = "0" then VBit(false) 
+      else if input = "1" then VBit(true) 
       else 
-        let i = ref i in
+        (*let i = ref i in
         let l = ref [] in 
         while !i > 0 do 
           let byte = !i mod 10 in
           if (byte != 0 && byte != 1) then failwith "inputs must be given in binary";
           l := (if byte = 0 then false else true) :: !l ;
           i := !i / 10
+        done ;
+        VBitArray(Array.of_list !l)*)
+        let l = ref [] in
+        for i = 0 to (String.length input) - 1 do
+          l := (
+            match input.[i] with 
+            | '0' -> false
+            | '1' -> true
+            | _ -> failwith "inputs must be given in binary"
+          )
+          :: !l
         done ;
         VBitArray(Array.of_list !l)
     )
@@ -67,12 +78,32 @@ let simulator program number_steps =
   | Emux(choice, a1, a2) -> begin
     match simulate_arg choice with
     | VBit(b) -> if b then simulate_arg a2 else simulate_arg a1
-    | VBitArray(_) -> failwith "VBitArrays are not implemented yet"
+    | VBitArray(_) -> failwith "Syntax error: the first argument of MUX must be a byte, not a bus"
     end
   | Erom(addr_size, word_size, read_addr) -> failwith "VBitArrays are not implemented yet"
     (*if word_size = 1 then rom.(word_size * (simulate_arg read_addr)) else failwith "ROM only available for VBit"*)
   | Eram(addr_size, word_size, read_addr, write_enable, write_addr, data) -> failwith "VBitArrays are not implemented yet"
-  | Econcat(_) | Eslice(_) | Eselect(_) -> failwith "VBitArrays are not implemented yet"
+  | Eslice(i1, i2, arg) -> 
+    (
+      match simulate_arg arg with 
+      | VBit(_) -> failwith "Syntax error: SLICE must be called on a bus, not a byte"
+      | VBitArray(array) -> VBitArray(Array.sub array i1 (i2-i1+1))
+    )
+  | Econcat(arg1, arg2) -> 
+    let array1 = 
+      match simulate_arg arg1 with
+      | VBit(b) -> [|b|]
+      | VBitArray(a) -> a
+    and array2 = 
+      match simulate_arg arg2 with
+      | VBit(b) -> [|b|]
+      | VBitArray(a) -> a
+    in 
+    VBitArray(Array.concat [array1; array2])
+  | Eselect(i, a) -> 
+    match simulate_arg a with
+    | VBit(v) -> if i = 0 then VBit(v) else failwith "SELECT applied with non-null index on a byte"
+    | VBitArray(array) -> VBit(array.(i)) (* TODO: catch array out of range *)
   in
   
   (* for each equation, compute the value and add it to the environment *)
