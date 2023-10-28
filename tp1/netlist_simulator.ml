@@ -21,33 +21,12 @@ Simulates the execution of the given program.
 The program is assumed to be scheduled.
 *)
 let simulator program number_steps =
-  let number_steps = if number_steps >= 1 then number_steps else 1 in
+  let number_steps = ref number_steps in
   (* initialises the ROM with zeros as arbitrary values *)
   let rom = Array.make (pow 2 rom_addr_size) false in
 
   (* we will store the current values of the variables in a hash table *)
   let environment = Hashtbl.create (List.length program.p_outputs) in
-
-  (* asks the user to enter the inputs of the program *)
-  List.iter
-    (fun ident ->
-      Printf.printf "%s ? " ident;
-      let input = read_line () in
-      Hashtbl.add environment ident
-        (if input = "0" then VBit false
-         else if input = "1" then VBit true
-         else
-           let l = ref [] in
-           for i = 0 to String.length input - 1 do
-             l :=
-               (match input.[i] with
-               | '0' -> false
-               | '1' -> true
-               | _ -> failwith "Inputs must be given in binary")
-               :: !l
-           done;
-           VBitArray (Array.of_list !l)))
-    program.p_inputs;
 
   (* look up a variable in the environment and return its value *)
   let find_environment_var ident =
@@ -139,14 +118,41 @@ let simulator program number_steps =
           | Invalid_argument s -> failwith ("SELECT: " ^ s))
   in
 
-  for i = 0 to number_steps - 1 do
+  let i = ref 0 in
+  while !number_steps <> 0 do
+    number_steps := !number_steps - 1;
+    incr i;
+
+
+    Format.printf "Step %d:@." !i ;
+
+    (* asks the user to enter the inputs of the program *)
+    List.iter
+    (fun ident ->
+      Printf.printf "%s ? " ident;
+      let input = read_line () in
+      Hashtbl.add environment ident
+        (if input = "0" then VBit false
+        else if input = "1" then VBit true
+        else
+          let l = ref [] in
+          for i = 0 to String.length input - 1 do
+            l :=
+              (match input.[i] with
+              | '0' -> false
+              | '1' -> true
+              | _ -> failwith "Inputs must be given in binary")
+              :: !l
+          done;
+          VBitArray (Array.of_list !l)))
+    program.p_inputs;
+
     (* for each equation, computes the value, and adds it to the environment *)
     List.iter
       (fun (ident, expr) -> Hashtbl.add environment ident (simulate_expr expr))
       program.p_eqs ;
 
     (* display the value of each variable *)
-    Format.printf "\n== Step %d ==\n" i ;
     List.iter
       (fun ident ->
         let v = find_environment_var ident in
@@ -155,7 +161,7 @@ let simulator program number_steps =
         | VBitArray a ->
             Format.printf "=> %s = " ident;
             Array.iter (fun b -> Format.printf "%d" (if b then 1 else 0)) a;
-            Format.printf "\n")
+            Format.printf "@.")
       program.p_outputs
   done
 
