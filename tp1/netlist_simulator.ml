@@ -21,6 +21,10 @@ let value_to_int = function
 | VBit b -> if b then 1 else 0
 | VBitArray array -> bool_array_to_int array
 
+(* Pretty printer for the environment *)
+let print_environment environment =
+  Hashtbl.iter (fun x y -> Printf.printf "%s -> %d\n" x (value_to_int y)) environment
+
 (** 
 Simulates the execution of the given program.
 The program is assumed to be scheduled.
@@ -35,11 +39,12 @@ let simulator program number_steps =
   let ram_to_write = Hashtbl.create 0 in
 
   (* we will store the current values of the variables in a hash table *)
-  let environment = Hashtbl.create (List.length program.p_outputs) in
+  let context = ref (Hashtbl.create 0) in
+  let environment = ref (Hashtbl.create 0) in
 
   (* look up a variable in the environment and return its value *)
-  let find_environment_var ident =
-    match Hashtbl.find_opt environment ident with
+  let find_context_var ident =
+    match Hashtbl.find_opt !context ident with
     | None ->
         Printf.printf "Cannot find ident '%s' in environment.\n" ident;
         failwith "Environment error"
@@ -49,7 +54,7 @@ let simulator program number_steps =
   (* utility function to evaluate an argument *)
   let simulate_arg = function
     | Aconst c -> c
-    | Avar ident -> find_environment_var ident
+    | Avar ident -> find_context_var ident
   in
 
   (* evaluate the given expression *)
@@ -57,7 +62,7 @@ let simulator program number_steps =
     | Earg arg -> simulate_arg arg
     | Ereg ident -> (
         try
-          Hashtbl.find environment ident
+          Hashtbl.find !environment ident
           (* if the value is not in the environment, then this is the first cycle.
              an arbitrary default value is then returned *)
         with Not_found -> (
@@ -65,7 +70,7 @@ let simulator program number_steps =
           (* arbitrary default values: zeros everywhere *)
           | TBit -> VBit false
           | TBitArray l -> VBitArray (Array.make l false) in 
-          Hashtbl.add environment ident value ;
+          Hashtbl.add !environment ident value ;
           value
         )
       )
@@ -76,7 +81,7 @@ let simulator program number_steps =
             VBit
               (match binop with
               | Or -> b1 || b2
-              | Xor -> (b1 || b1) && not (b1 && b2)
+              | Xor -> (b1 || b2) && not (b1 && b2)
               | And -> b1 && b2
               | Nand -> not (b1 && b2))
         | VBitArray(a1), VBitArray(a2) -> 
@@ -87,7 +92,7 @@ let simulator program number_steps =
               fun i -> let b1 = a1.(i) and b2 = a2.(i) in
               (match binop with
               | Or -> b1 || b2
-              | Xor -> (b1 || b1) && not (b1 && b2)
+              | Xor -> (b1 || b2) && not (b1 && b2)
               | And -> b1 && b2
               | Nand -> not (b1 && b2))
             )
@@ -171,7 +176,7 @@ let simulator program number_steps =
       Printf.printf "%s ? " ident;
 
       let input = read_line () in
-      Hashtbl.add environment ident
+      Hashtbl.add !context ident
         (if input = "0" then VBit false
         else if input = "1" then VBit true
         else begin
@@ -186,34 +191,37 @@ let simulator program number_steps =
           done;
           VBitArray (Array.of_list !l)
         end))
-    program.p_inputs;
+      program.p_inputs;
 
-    (* for each equation, computes the value, and adds it to the environment *)
-    List.iter
-      (fun (ident, expr) -> Hashtbl.add environment ident (simulate_expr ident expr))
-      program.p_eqs ;
+      (* for each equation, computes the value, and adds it to the context *)
+      List.iter
+        (fun (ident, expr) -> Hashtbl.add !context ident (simulate_expr ident expr))
+        program.p_eqs ;
 
+      (* display the value of each variable *)
+      List.iter
+        (fun ident ->
+          let v = find_context_var ident in
+          match v with
+          | VBit b -> Format.printf "=> %s = %d\n" ident (if b then 1 else 0)
+          | VBitArray a ->
+              Format.printf "=> %s = " ident;
+              Array.iter (fun b -> Format.printf "%d" (if b then 1 else 0)) a;
+              Format.printf "@.")
+        program.p_outputs ;
 
-    (* write to the RAM *)
-    Hashtbl.iter (fun eq_ident (write_addr, data) -> 
-      let ram_block = Hashtbl.find ram eq_ident in
-      for i = 0 to (Array.length data) - 1 do 
-        ram_block.(write_addr + i) <- data.(i)
-      done
-    ) ram_to_write ;
-    Hashtbl.clear ram_to_write ;
+      (* write to the RAM *)
+      Hashtbl.iter (fun eq_ident (write_addr, data) -> 
+        let ram_block = Hashtbl.find ram eq_ident in
+        for i = 0 to (Array.length data) - 1 do 
+          ram_block.(write_addr + i) <- data.(i)
+        done
+      ) ram_to_write ;
+      Hashtbl.clear ram_to_write ;
 
-    (* display the value of each variable *)
-    List.iter
-      (fun ident ->
-        let v = find_environment_var ident in
-        match v with
-        | VBit b -> Format.printf "=> %s = %d\n" ident (if b then 1 else 0)
-        | VBitArray a ->
-            Format.printf "=> %s = " ident;
-            Array.iter (fun b -> Format.printf "%d" (if b then 1 else 0)) a;
-            Format.printf "@.")
-      program.p_outputs
+      (* replace the environment by the context of the current cycle *)
+      environment := !context ;
+      context := Hashtbl.create 0
   done
 
 
