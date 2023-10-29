@@ -2,8 +2,7 @@ open Netlist_ast
 
 let print_only = ref false
 let number_steps = ref (-1)
-let rom_addr_size = 8
-let ram_addr_size = 8
+let rom_addr_size = 2
 
 (* Fast exponentiation *)
 let rec pow a = function
@@ -17,6 +16,7 @@ let rec pow a = function
 let bool_array_to_int array =
   Array.fold_right (fun b i -> (2 * i) + if b then 1 else 0) array 0
 
+(** Convert a value (boolean or boolean array) to an integer*)
 let value_to_int = function
 | VBit b -> if b then 1 else 0
 | VBitArray array -> bool_array_to_int array
@@ -29,7 +29,10 @@ let simulator program number_steps =
   let number_steps = ref number_steps in
   (* initialises the ROM with zeros as arbitrary values *)
   let rom = Array.make (pow 2 rom_addr_size) false
-  and ram = Array.make (pow 2 ram_addr_size) false in
+  (* each equation has its block of RAM *)
+  and ram = Hashtbl.create 0 in
+
+  let ram_to_write = Hashtbl.create 0 in
 
   (* we will store the current values of the variables in a hash table *)
   let environment = Hashtbl.create (List.length program.p_outputs) in
@@ -50,18 +53,22 @@ let simulator program number_steps =
   in
 
   (* evaluate the given expression *)
-  let rec simulate_expr = function
+  let simulate_expr eq_ident = function
     | Earg arg -> simulate_arg arg
     | Ereg ident -> (
         try
-          find_environment_var ident
+          Hashtbl.find environment ident
           (* if the value is not in the environment, then this is the first cycle.
              an arbitrary default value is then returned *)
         with Not_found -> (
-          match Env.find ident program.p_vars with
+          let value = match Env.find ident program.p_vars with
           (* arbitrary default values: zeros everywhere *)
           | TBit -> VBit false
-          | TBitArray l -> VBitArray (Array.make l false)))
+          | TBitArray l -> VBitArray (Array.make l false) in 
+          Hashtbl.add environment ident value ;
+          value
+        )
+      )
     | Enot arg -> simulate_arg arg
     | Ebinop (binop, a1, a2) -> (
         match (simulate_arg a1, simulate_arg a2) with
@@ -89,39 +96,41 @@ let simulator program number_steps =
     | Emux (choice, a1, a2) -> (
         match simulate_arg choice with
         | VBit b -> if b then simulate_arg a2 else simulate_arg a1
-        | VBitArray _ ->
-            failwith
-              "MUX: the first argument must be a byte, not a bus")
+        | VBitArray _ -> failwith "MUX: the first argument must be a byte, not a bus"
+      )
     | Erom (addr_size, word_size, read_addr) ->
         let read_addr = value_to_int (simulate_arg read_addr) in
         if word_size = 1 then VBit rom.(word_size * read_addr)
         else VBitArray (Array.sub rom read_addr word_size)
     | Eram (addr_size, word_size, read_addr, write_enable, write_addr, data) ->
-        (* we choose to start by reading and then writing *)
-        (* reading *)
-        let read_addr = value_to_int (simulate_arg read_addr) in
-        let output_value = if word_size = 1 then VBit ram.(word_size * read_addr)
-        else VBitArray (Array.sub ram read_addr word_size) in
-
         (* writing *)
-        let write_addr = value_to_int (simulate_arg write_addr)
-        and write_enable = (match simulate_arg write_enable with
+        let write_enable = (match simulate_arg write_enable with
         | VBit b -> b
         | VBitArray _ -> failwith "RAM: write_enable must be a bit, not a bus")
         in
-        
-        let data = (match simulate_arg data with 
-        | VBit b -> [|b|]
-        | VBitArray a -> a
-        ) in
-        if Array.length data <> word_size then failwith "RAM: data must be of size word_size" ;
         if write_enable then begin 
-          for i = 0 to word_size - 1 do 
-            ram.(write_addr + i) <- data.(i)
-          done
+          let write_addr = value_to_int (simulate_arg write_addr) in
+
+          (* convert the data value to a boolean array *)
+          let data = (match simulate_arg data with 
+          | VBit b -> [|b|]
+          | VBitArray a -> a
+          ) in
+          if Array.length data <> word_size then failwith "RAM: data must be of size word_size" ;
+          (* wait until the end of the cycle to write to the RAM *)
+          Hashtbl.add ram_to_write eq_ident (write_addr, data)
         end ;
 
-        output_value
+        (* reading *)
+        let read_addr = value_to_int (simulate_arg read_addr) in
+        if not (Hashtbl.mem ram eq_ident) 
+          then Hashtbl.add ram eq_ident (Array.make (pow 2 addr_size) false) ;
+        let output_array = 
+          Array.sub (Hashtbl.find ram eq_ident) read_addr word_size
+        in
+        (match word_size with
+        | 1 -> VBit output_array.(0)
+        | _ -> VBitArray output_array)
         
     | Eslice (i1, i2, arg) -> (
         match simulate_arg arg with
@@ -160,11 +169,12 @@ let simulator program number_steps =
     List.iter
     (fun ident ->
       Printf.printf "%s ? " ident;
+
       let input = read_line () in
       Hashtbl.add environment ident
         (if input = "0" then VBit false
         else if input = "1" then VBit true
-        else
+        else begin
           let l = ref [] in
           for i = 0 to String.length input - 1 do
             l :=
@@ -174,13 +184,24 @@ let simulator program number_steps =
               | _ -> failwith "Inputs must be given in binary")
               :: !l
           done;
-          VBitArray (Array.of_list !l)))
+          VBitArray (Array.of_list !l)
+        end))
     program.p_inputs;
 
     (* for each equation, computes the value, and adds it to the environment *)
     List.iter
-      (fun (ident, expr) -> Hashtbl.add environment ident (simulate_expr expr))
+      (fun (ident, expr) -> Hashtbl.add environment ident (simulate_expr ident expr))
       program.p_eqs ;
+
+
+    (* write to the RAM *)
+    Hashtbl.iter (fun eq_ident (write_addr, data) -> 
+      let ram_block = Hashtbl.find ram eq_ident in
+      for i = 0 to (Array.length data) - 1 do 
+        ram_block.(write_addr + i) <- data.(i)
+      done
+    ) ram_to_write ;
+    Hashtbl.clear ram_to_write ;
 
     (* display the value of each variable *)
     List.iter
