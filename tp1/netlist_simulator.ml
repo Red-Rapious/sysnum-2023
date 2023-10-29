@@ -74,7 +74,11 @@ let simulator program number_steps =
           value
         )
       )
-    | Enot arg -> simulate_arg arg
+    | Enot arg -> (
+      match simulate_arg arg with
+      | VBit b -> VBit (not b)
+      | VBitArray a -> VBitArray (Array.map not a)
+    )
     | Ebinop (binop, a1, a2) -> (
         match (simulate_arg a1, simulate_arg a2) with
         | VBit b1, VBit b2 ->
@@ -230,7 +234,11 @@ let compile filename =
     let p = Netlist.read_file filename in
     try
       let p = Scheduler.schedule p in
-      simulator p !number_steps
+      if !print_only then 
+        let out_name = (Filename.chop_suffix filename ".net") ^ "_sch.net" in
+        let out = open_out out_name in
+        Netlist_printer.print_program out p
+      else simulator p !number_steps
     with Scheduler.Combinational_cycle ->
       Format.eprintf "The netlist has a combinatory cycle.@."
   with Netlist.Parse_error s ->
@@ -239,7 +247,10 @@ let compile filename =
 
 let main () =
   Arg.parse
-    [ ("-n", Arg.Set_int number_steps, "Number of steps to simulate") ]
+    [ 
+      ("-n", Arg.Set_int number_steps, "<n> Number of steps to simulate");
+      ("-print_only", Arg.Set print_only, "Print the sorted net-list on standard output without simulating it")
+     ]
     compile ""
 ;;
 
