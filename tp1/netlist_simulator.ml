@@ -6,7 +6,7 @@ let number_steps = ref (-1)
 let print_only = ref false
 let debug_mode = ref false
 
-let rom_addr_size = 2
+let rom_addr_size = 8
 
 (* Fast exponentiation *)
 let rec pow a = function
