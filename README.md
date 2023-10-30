@@ -1,5 +1,21 @@
 # Lab1: A net-list simulator
 ## Compilation and execution
+You can compile my code with:
+```
+ocamlbuild netlist_simulator.byte
+```
+Then, you can simulate an example using:
+```
+./netlist_simulator.byte test/fulladder.net
+```
+
+The following options are available:
+```
+-n <n>        Number of steps to simulate
+-print_only   Print the sorted net-list on standard output without simulating it
+-dbg          Enable the debug mode, with more informations being displayed
+-help         Display the list of options
+```
 
 ## Behavior of the simulator
 ### General behavior
@@ -32,5 +48,3 @@ Most OCaml errors (such as `Index out of range`) are catched and displayed to th
 
 ### Handling of registers
 I did not immediatly realise the need of two hash tables (`context` and `environment`) to store the variables. I had to debug my simulator before adding `environment`.
-
-### Handling of the RAM
