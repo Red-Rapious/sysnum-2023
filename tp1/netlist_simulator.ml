@@ -305,7 +305,13 @@ let simulator program number_steps =
       environment := !context ;
       context := Hashtbl.create 0 ;
 
-      if !debug_mode then Format.printf "(End of step %d.)@." !step
+      if !debug_mode then begin
+        Format.printf "Current environment:@." ;
+        print_environment !environment ;
+        Format.printf "Current context:@." ;
+        print_environment !context ;
+        Format.printf "(End of step %d.)\n@." !step
+      end
   done
 
 
