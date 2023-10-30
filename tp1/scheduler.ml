@@ -22,11 +22,7 @@ let read_exp (id, ex) =
       read_arg a2;
       read_arg a3
   | Erom (_, _, a) -> read_arg a
-  | Eram (_, _, a1, a2, a3, a4) ->
-      read_arg a1;
-      read_arg a2;
-      read_arg a3;
-      read_arg a4
+  | Eram (_, _, a, _, _, _) -> read_arg a (* only read_addr is used to compute the value *)
   | Econcat (a1, a2) ->
       read_arg a1;
       read_arg a2

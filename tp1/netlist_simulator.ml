@@ -2,8 +2,10 @@ open Netlist_ast
 
 exception InputError of string
 
-let print_only = ref false
 let number_steps = ref (-1)
+let print_only = ref false
+let debug_mode = ref false
+
 let rom_addr_size = 2
 
 (* Fast exponentiation *)
@@ -44,13 +46,29 @@ let simulator program number_steps =
   let context = ref (Hashtbl.create 0) in
   let environment = ref (Hashtbl.create 0) in
 
-  (* look up a variable in the environment and return its value *)
+  (* look up a variable in the context and return its value *)
   let find_context_var ident =
     match Hashtbl.find_opt !context ident with
     | None ->
         Printf.printf "Cannot find ident '%s' in environment.\n" ident;
         failwith "Environment error"
     | Some v -> v
+  in
+
+  (* look up a variable in the environment and return its value *)
+  let find_environment_var ident =
+    try
+      Hashtbl.find !environment ident
+      (* if the value is not in the environment, then this is the first cycle.
+          an arbitrary default value is then returned *)
+    with Not_found -> (
+      let value = match Env.find ident program.p_vars with
+      (* arbitrary default values: zeros everywhere *)
+      | TBit -> VBit false
+      | TBitArray l -> VBitArray (Array.make l false) in 
+      Hashtbl.add !environment ident value ;
+      value
+    )
   in
 
   (* utility function to evaluate an argument *)
@@ -62,20 +80,7 @@ let simulator program number_steps =
   (* evaluate the given expression *)
   let simulate_expr eq_ident = function
     | Earg arg -> simulate_arg arg
-    | Ereg ident -> (
-        try
-          Hashtbl.find !environment ident
-          (* if the value is not in the environment, then this is the first cycle.
-             an arbitrary default value is then returned *)
-        with Not_found -> (
-          let value = match Env.find ident program.p_vars with
-          (* arbitrary default values: zeros everywhere *)
-          | TBit -> VBit false
-          | TBitArray l -> VBitArray (Array.make l false) in 
-          Hashtbl.add !environment ident value ;
-          value
-        )
-      )
+    | Ereg ident -> find_environment_var ident
     | Enot arg -> (
       match simulate_arg arg with
       | VBit b -> VBit (not b)
@@ -111,8 +116,16 @@ let simulator program number_steps =
       )
     | Erom (addr_size, word_size, read_addr) ->
         let read_addr = value_to_int (simulate_arg read_addr) in
-        if word_size = 1 then VBit rom.(word_size * read_addr)
-        else VBitArray (Array.sub rom read_addr word_size)
+        if word_size = 1 then VBit(
+          try rom.(word_size * read_addr)
+          with | Invalid_argument s -> 
+            (Format.eprintf "ROM: the following error occurred: %s@." s;
+            exit 2))
+        else VBitArray (
+          try Array.sub rom read_addr word_size
+          with | Invalid_argument s -> 
+            (Format.eprintf "ROM: the following error occurred: %s@." s;
+            exit 2))
     | Eram (addr_size, word_size, read_addr, write_enable, write_addr, data) ->
         (* writing *)
         let write_enable = (match simulate_arg write_enable with
@@ -123,21 +136,36 @@ let simulator program number_steps =
           let write_addr = value_to_int (simulate_arg write_addr) in
 
           (* convert the data value to a boolean array *)
-          let data = (match simulate_arg data with 
+          let data = match data with
+          | Aconst c -> c
+          | Avar v -> find_environment_var v
+          in
+          let data = match data with 
           | VBit b -> [|b|]
           | VBitArray a -> a
-          ) in
+          in
           if Array.length data <> word_size then failwith "RAM: data must be of size word_size" ;
           (* wait until the end of the cycle to write to the RAM *)
           Hashtbl.add ram_to_write eq_ident (write_addr, data)
         end ;
 
         (* reading *)
-        let read_addr = value_to_int (simulate_arg read_addr) in
+        let read_addr = match read_addr with
+        | Aconst c -> c
+        | Avar v -> find_environment_var v 
+        in
+        let read_addr = value_to_int read_addr in
+
+        (* if the RAM does not contain a block for this instruction, allocate a new one *)
         if not (Hashtbl.mem ram eq_ident) 
           then Hashtbl.add ram eq_ident (Array.make (pow 2 addr_size) false) ;
+        (* retrieve the array from the RAM *)
         let output_array = 
-          Array.sub (Hashtbl.find ram eq_ident) read_addr word_size
+          try Array.sub (Hashtbl.find ram eq_ident) read_addr word_size
+          with | Invalid_argument s -> 
+            (Format.eprintf "RAM: the following error occurred: %s@." s;
+            exit 2)
+
         in
         (match word_size with
         | 1 -> VBit output_array.(0)
@@ -146,8 +174,13 @@ let simulator program number_steps =
     | Eslice (i1, i2, arg) -> (
         match simulate_arg arg with
         | VBit _ ->
-            failwith "SLICE: third argument must be a bus, not a bt"
-        | VBitArray array -> VBitArray (Array.sub array i1 (i2 - i1 + 1)))
+            failwith "SLICE: third argument must be a bus, not a bit"
+        | VBitArray array -> VBitArray (
+          try Array.sub array i1 (i2 - i1 + 1)
+          with | Invalid_argument s -> 
+            (Format.eprintf "SLICE: the following error occurred: %s@." s;
+            exit 2)
+        ))
     | Econcat (arg1, arg2) ->
         let array1 =
           match simulate_arg arg1 with 
@@ -166,8 +199,17 @@ let simulator program number_steps =
             else failwith "SELECT: applied on a byte with non-null index"
         | VBitArray array -> 
           try VBit array.(i) with 
-          | Invalid_argument s -> failwith ("SELECT: " ^ s))
+          | Invalid_argument s -> 
+            Format.eprintf "SELECT: the following error occurred: %s@." s;
+            exit 2
+      )
   in
+
+  if !debug_mode then Format.printf "(Initialisation done. Starting to simulate %s steps.)\n@." 
+    (match !number_steps with
+    | n when n > 0 -> string_of_int n
+    | _ -> "∞"
+    );
 
   let step = ref 0 in
   while !number_steps <> 0 do
@@ -175,6 +217,8 @@ let simulator program number_steps =
     incr step;
 
     Format.printf "Step %d:@." !step ;
+
+    if !debug_mode then Format.printf "(Starting to ask for the inputs.)@." ;
 
     (* asks the user to enter the inputs of the program *)
     List.iter
@@ -189,18 +233,18 @@ let simulator program number_steps =
           let input = read_line () in
           Hashtbl.add !context ident
             (
+              (* verify that the given input has the expected size *)
+              let expected_length = match Env.find ident program.p_vars with
+              | TBit -> 1
+              | TBitArray x -> x
+              in
+              if String.length input <> expected_length 
+                then raise (InputError ("Input does not have the correct size; the expected length is " ^ (string_of_int expected_length) ^ ".")) ;
+              
+              (* convert the input string to a bit or a bool array *)
               if input = "0" then VBit false
               else if input = "1" then VBit true
               else begin
-                (* verify that the given input has the expected size *)
-                let expected_length = match Env.find ident program.p_vars with
-                | TBit -> 1
-                | TBitArray x -> x
-                in
-                if String.length input <> expected_length 
-                  then raise (InputError "Input does not have the expected size.") ;
-              
-                (* convert the input string to a bool array *)
                 let l = ref [] in
                 for i = 0 to String.length input - 1 do
                   l :=
@@ -235,9 +279,22 @@ let simulator program number_steps =
               Format.printf "@.")
         program.p_outputs ;
 
-      (* write to the RAM *)
+      (* write in the RAM *)
+      if !debug_mode then Format.printf "(Writing in the RAM.)@." ;
       Hashtbl.iter (fun eq_ident (write_addr, data) -> 
         let ram_block = Hashtbl.find ram eq_ident in
+        if write_addr + (Array.length data) > Array.length ram_block 
+          then begin 
+            Format.printf 
+            "Error: the data to write in the RAM is too big to fit in the allocated block. I kindly provide you the following information:@.\
+             - Ident of the equation: %s@.\
+             - Write address: %d@.\
+             - Data length: %d@.\
+             - Block size: %d@." 
+            eq_ident write_addr (Array.length data) (Array.length ram_block); 
+            exit 2 
+          end
+        else
         for i = 0 to (Array.length data) - 1 do 
           ram_block.(write_addr + i) <- data.(i)
         done
@@ -246,7 +303,9 @@ let simulator program number_steps =
 
       (* replace the environment by the context of the current cycle *)
       environment := !context ;
-      context := Hashtbl.create 0
+      context := Hashtbl.create 0 ;
+
+      if !debug_mode then Format.printf "(End of step %d.)@." !step
   done
 
 
@@ -270,7 +329,8 @@ let main () =
   Arg.parse
     [ 
       ("-n", Arg.Set_int number_steps, "<n> Number of steps to simulate");
-      ("-print_only", Arg.Set print_only, "Print the sorted net-list on standard output without simulating it")
+      ("-print_only", Arg.Set print_only, "Print the sorted net-list on standard output without simulating it");
+      ("-dbg", Arg.Set debug_mode, "Enable the debug mode, with more informations being displayed")
      ]
     compile ""
 ;;
