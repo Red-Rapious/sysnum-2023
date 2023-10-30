@@ -1,5 +1,7 @@
 open Netlist_ast
 
+exception InputError of string
+
 let print_only = ref false
 let number_steps = ref (-1)
 let rom_addr_size = 2
@@ -177,24 +179,43 @@ let simulator program number_steps =
     (* asks the user to enter the inputs of the program *)
     List.iter
     (fun ident ->
-      Printf.printf "%s ? " ident;
+      
+      let correct_input = ref false in 
+      while not !correct_input do
+        try begin
+          correct_input := true ;
 
-      let input = read_line () in
-      Hashtbl.add !context ident
-        (if input = "0" then VBit false
-        else if input = "1" then VBit true
-        else begin
-          let l = ref [] in
-          for i = 0 to String.length input - 1 do
-            l :=
-              (match input.[i] with
-              | '0' -> false
-              | '1' -> true
-              | _ -> failwith "Inputs must be given in binary")
-              :: !l
-          done;
-          VBitArray (Array.of_list !l)
-        end))
+          Printf.printf "%s ? " ident;
+          let input = read_line () in
+          Hashtbl.add !context ident
+            (
+              if input = "0" then VBit false
+              else if input = "1" then VBit true
+              else begin
+                (* verify that the given input has the expected size *)
+                let expected_length = match Env.find ident program.p_vars with
+                | TBit -> 1
+                | TBitArray x -> x
+                in
+                if String.length input <> expected_length 
+                  then raise (InputError "Input does not have the expected size.") ;
+              
+                (* convert the input string to a bool array *)
+                let l = ref [] in
+                for i = 0 to String.length input - 1 do
+                  l :=
+                    (match input.[i] with
+                    | '0' -> false
+                    | '1' -> true
+                    | _ -> raise (InputError "Input must be given in binary"))
+                    :: !l
+                done;
+                VBitArray (Array.of_list !l)
+              end
+            )
+        end 
+      with | InputError s -> Format.printf "%s@." s ; correct_input := false
+      done)
       program.p_inputs;
 
       (* for each equation, computes the value, and adds it to the context *)
