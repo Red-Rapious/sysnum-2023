@@ -1,0 +1,7 @@
+INPUT 
+OUTPUT o
+VAR
+  o
+IN
+o = ROM 8 8 0
+

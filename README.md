@@ -1,4 +1,6 @@
 # Lab1: A net-list simulator
+> Note: the source code for this project is available [on GitHub](https://github.com/Red-Rapious/sysnum-2023).
+
 ## Compilation and execution
 You can compile my code with:
 ```
@@ -14,12 +16,11 @@ The following options are available:
 -n <n>        Number of steps to simulate
 -print_only   Print the sorted net-list on standard output without simulating it
 -dbg          Enable the debug mode, with more informations being displayed
+-rom          Name of the file used for ROM. If not specified, will load ROM.txt
 -help         Display the list of options
 ```
 
 ## Behavior of the simulator
-### General behavior
-
 ### Registers
 Variables computed during the current cycle are stored in a hash table (`context`), with the variable identifier as the key. An `environment` hash table is also used to store the values computed during the previous cycle. At the end of each cycle, the environment is replaced by the context, and the context is cleared. 
 
@@ -33,7 +34,7 @@ Data is written inside the RAM at the end of each cycle. To do so, another hash 
 Note that the only parameter of the `RAM` instruction that introduces an edge in the dependency graph of the scheduler is `read_addr`. Others are not needed to *compute the value*.
 
 ### The ROM
-Conversely to the RAM, the ROM is stored as only one block, of predefined size (`2^rom_add_size`, where `rom_add_size` is a constant, hardcoded for now in the simulator). The ROM is stored as an array, initialised for now with the arbitrary value of `false` everywhere. It cannot be modified during the simulation. The `ROM` instruction simply returns a part of this array.
+The ROM is loaded from an external file. The default file name is `ROM.txt`, but the `-rom` option allow the user to specify another file. The simulator will read the first line of the file, and load it as an array named `rom`. `ROM` instructions will simply read a part of the array. You can test the ROM using the `test/rom.net` file.
 
 ### Bus-wise operations
 Binary operators are implemented between two buses. If the two buses are of the same size, the binary operator is applied to each pair of coefficient; otherwise, an error is raised.

@@ -5,8 +5,7 @@ exception InputError of string
 let number_steps = ref (-1)
 let print_only = ref false
 let debug_mode = ref false
-
-let rom_addr_size = 8
+let rom_file = ref "ROM.txt"
 
 (* Fast exponentiation *)
 let rec pow a = function
@@ -35,8 +34,24 @@ The program is assumed to be scheduled.
 *)
 let simulator program number_steps =
   let number_steps = ref number_steps in
-  (* initialises the ROM with zeros as arbitrary values *)
-  let rom = Array.make (pow 2 rom_addr_size) false
+
+  (* initialises the ROM from an external file *)
+  let rom = begin
+    let ic = open_in !rom_file in
+    try
+      let line = input_line ic in
+      close_in ic ;
+      Array.init (String.length line) (fun i -> 
+        match line.[i] with
+        |'0' -> false
+        |'1' -> true
+        | _  -> failwith "ROM: failed to initialise ROM (character different from 0 or 1)"
+      )
+    with e ->
+      close_in_noerr ic;
+      raise e
+  end
+
   (* each equation has its block of RAM *)
   and ram = Hashtbl.create 0 in
 
@@ -115,6 +130,7 @@ let simulator program number_steps =
         | VBitArray _ -> failwith "MUX: the first argument must be a byte, not a bus"
       )
     | Erom (addr_size, word_size, read_addr) ->
+        if addr_size <> Array.length rom then failwith "ROM: incorrect addr_size. Change the instruction or the ROM.txt file." ;
         let read_addr = value_to_int (simulate_arg read_addr) in
         if word_size = 1 then VBit(
           try rom.(word_size * read_addr)
@@ -336,7 +352,8 @@ let main () =
     [ 
       ("-n", Arg.Set_int number_steps, "<n> Number of steps to simulate");
       ("-print_only", Arg.Set print_only, "Print the sorted net-list on standard output without simulating it");
-      ("-dbg", Arg.Set debug_mode, "Enable the debug mode, with more informations being displayed")
+      ("-dbg", Arg.Set debug_mode, "Enable the debug mode, with more informations being displayed");
+      ("-rom", Arg.Set_string rom_file, "Name of the file used for ROM. If not specified, will load ROM.txt")
      ]
     compile ""
 ;;
