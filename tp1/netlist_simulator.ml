@@ -113,6 +113,7 @@ let simulator program number_steps =
         | VBitArray(a1), VBitArray(a2) -> 
           if Array.length a1 <> Array.length a2 
             then failwith "Syntax error: a binary operator can only be applied between two buses of same size" ;
+          (* apply the binary operator bit-wise *)
           VBitArray(
             Array.init (Array.length a1) (
               fun i -> let b1 = a1.(i) and b2 = a2.(i) in
@@ -130,7 +131,9 @@ let simulator program number_steps =
         | VBitArray _ -> failwith "MUX: the first argument must be a byte, not a bus"
       )
     | Erom (addr_size, word_size, read_addr) ->
-        if addr_size <> Array.length rom then failwith "ROM: incorrect addr_size. Change the instruction or the ROM.txt file." ;
+        if addr_size <> Array.length rom then
+            (Format.eprintf "ROM: incorrect addr_size. addr_size is %d but the size in the ROM file is %d. Change the instruction or the ROM.txt file.@." addr_size (Array.length rom);
+            exit 2) ;
         let read_addr = value_to_int (simulate_arg read_addr) in
         if word_size = 1 then VBit(
           try rom.(word_size * read_addr)
@@ -141,7 +144,8 @@ let simulator program number_steps =
           try Array.sub rom read_addr word_size
           with | Invalid_argument s -> 
             (Format.eprintf "ROM: the following error occurred: %s@." s;
-            exit 2))
+            exit 2)
+        )
     | Eram (addr_size, word_size, read_addr, write_enable, write_addr, data) ->
         (* writing *)
         let write_enable = (match simulate_arg write_enable with
@@ -161,6 +165,7 @@ let simulator program number_steps =
           | VBitArray a -> a
           in
           if Array.length data <> word_size then failwith "RAM: data must be of size word_size" ;
+
           (* wait until the end of the cycle to write to the RAM *)
           Hashtbl.add ram_to_write eq_ident (write_addr, data)
         end ;
