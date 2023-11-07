@@ -40,6 +40,10 @@ let simulator program number_steps =
     let ic = open_in !rom_file in
     try
       let line = input_line ic in
+      (
+        try let _ = input_line ic in Format.printf "Warning: the provided ROM file contains multiple lines. Only the first line is read, the other ones will be discarded."
+        with | End_of_file -> ()
+      );
       close_in ic ;
       Array.init (String.length line) (fun i -> 
         match line.[i] with
